@@ -1,10 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-// Generate a unique session ID
-const generateSessionId = () => {
-  return 'session_' + Math.random().toString(36).substring(2, 15)
-}
-
 function App() {
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
@@ -13,7 +8,6 @@ function App() {
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [showPinyin, setShowPinyin] = useState(true)
   const [autoSpeak, setAutoSpeak] = useState(true)
-  const [sessionId] = useState(generateSessionId)
   const [error, setError] = useState(null)
 
   const messagesEndRef = useRef(null)
@@ -118,7 +112,7 @@ function App() {
   }, [])
 
   // Send message to API
-  const sendMessage = async (text) => {
+  const sendMessage = async (text, currentMessages = messages) => {
     if (!text.trim()) return
 
     setError(null)
@@ -131,7 +125,10 @@ function App() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text.trim(), sessionId }),
+        body: JSON.stringify({
+          message: text.trim(),
+          history: currentMessages // Send conversation history for context
+        }),
       })
 
       if (!response.ok) {
@@ -162,23 +159,12 @@ function App() {
   }
 
   // Start new conversation
-  const startNewConversation = async () => {
+  const startNewConversation = () => {
     stopSpeaking()
     setMessages([])
     setError(null)
-
-    try {
-      await fetch('/api/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId }),
-      })
-    } catch (err) {
-      console.error('Failed to reset:', err)
-    }
-
-    // Get initial greeting
-    sendMessage("Hi! I want to learn Chinese.")
+    // Get initial greeting with empty history
+    sendMessage("Hi! I want to learn Chinese.", [])
   }
 
   // Format message content with pinyin visibility

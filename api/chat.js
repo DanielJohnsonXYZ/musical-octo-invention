@@ -1,15 +1,4 @@
-import express from 'express';
-import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-app.use(cors());
-app.use(express.json());
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -62,45 +51,44 @@ If this is the start of a conversation, warmly greet them and assess their level
 
 Remember: Your goal is to make them feel confident and excited about learning Chinese. Every interaction should leave them feeling like they made progress.`;
 
-// Store conversation history per session (in production, use proper session management)
-const conversations = new Map();
+export default async function handler(req, res) {
+  // Handle CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-app.post('/api/chat', async (req, res) => {
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   try {
-    const { message, sessionId } = req.body;
+    const { message, history = [] } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    // Get or create conversation history
-    const conversationKey = sessionId || 'default';
-    if (!conversations.has(conversationKey)) {
-      conversations.set(conversationKey, []);
-    }
-    const history = conversations.get(conversationKey);
-
-    // Add user message to history
-    history.push({ role: 'user', content: message });
-
-    // Keep conversation history manageable (last 20 exchanges)
-    const recentHistory = history.slice(-40);
+    // Build messages array from history + new message
+    const messages = [
+      ...history.slice(-38), // Keep last 19 exchanges (38 messages)
+      { role: 'user', content: message }
+    ];
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       system: SYSTEM_PROMPT,
-      messages: recentHistory,
+      messages: messages,
     });
 
     const assistantMessage = response.content[0].text;
 
-    // Add assistant response to history
-    history.push({ role: 'assistant', content: assistantMessage });
-
     res.json({
       message: assistantMessage,
-      sessionId: conversationKey,
     });
 
   } catch (error) {
@@ -110,16 +98,4 @@ app.post('/api/chat', async (req, res) => {
       details: error.message
     });
   }
-});
-
-// Reset conversation
-app.post('/api/reset', (req, res) => {
-  const { sessionId } = req.body;
-  const conversationKey = sessionId || 'default';
-  conversations.delete(conversationKey);
-  res.json({ success: true });
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+}
