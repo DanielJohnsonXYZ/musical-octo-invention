@@ -12,7 +12,7 @@ function App() {
 
   const messagesEndRef = useRef(null)
   const recognitionRef = useRef(null)
-  const synthRef = useRef(window.speechSynthesis)
+  const audioRef = useRef(null)
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -74,40 +74,62 @@ function App() {
     return matches ? matches.join('') : ''
   }
 
-  // Speak text using TTS
-  const speakText = useCallback((text) => {
-    if (!synthRef.current) return
-
-    // Cancel any ongoing speech
-    synthRef.current.cancel()
+  // Speak text using ElevenLabs TTS
+  const speakText = useCallback(async (text) => {
+    // Stop any current audio
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
 
     const chineseText = extractChineseText(text)
     if (!chineseText) return
 
-    const utterance = new SpeechSynthesisUtterance(chineseText)
-    utterance.lang = 'zh-CN'
-    utterance.rate = 0.85 // Slightly slower for learners
-    utterance.pitch = 1
+    setIsSpeaking(true)
 
-    // Try to find a Chinese voice
-    const voices = synthRef.current.getVoices()
-    const chineseVoice = voices.find(voice =>
-      voice.lang.includes('zh') || voice.lang.includes('cmn')
-    )
-    if (chineseVoice) {
-      utterance.voice = chineseVoice
+    try {
+      const response = await fetch('/api/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: chineseText }),
+      })
+
+      if (!response.ok) {
+        throw new Error('TTS failed')
+      }
+
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+
+      const audio = new Audio(audioUrl)
+      audioRef.current = audio
+
+      audio.onended = () => {
+        setIsSpeaking(false)
+        URL.revokeObjectURL(audioUrl)
+        audioRef.current = null
+      }
+
+      audio.onerror = () => {
+        setIsSpeaking(false)
+        URL.revokeObjectURL(audioUrl)
+        audioRef.current = null
+      }
+
+      await audio.play()
+
+    } catch (err) {
+      console.error('TTS error:', err)
+      setIsSpeaking(false)
     }
-
-    utterance.onstart = () => setIsSpeaking(true)
-    utterance.onend = () => setIsSpeaking(false)
-    utterance.onerror = () => setIsSpeaking(false)
-
-    synthRef.current.speak(utterance)
   }, [])
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
-    synthRef.current?.cancel()
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
     setIsSpeaking(false)
   }, [])
 
