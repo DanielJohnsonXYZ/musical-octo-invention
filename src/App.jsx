@@ -13,13 +13,22 @@ function App() {
   const [error, setError] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [hasStarted, setHasStarted] = useState(false)
+  const [syncInput, setSyncInput] = useState('')
+  const [showSyncInput, setShowSyncInput] = useState(false)
 
   const {
     progress,
     isLoaded,
+    syncCode,
+    isSyncing,
+    syncError,
     completeLesson,
     setCurrentLesson,
     updateSessionStats,
+    createSyncCode,
+    saveToCloud,
+    loadFromCloud,
+    clearSyncCode,
   } = useProgress()
 
   const messagesEndRef = useRef(null)
@@ -114,6 +123,16 @@ function App() {
       }
     }
   }, [hasStarted, updateSessionStats])
+
+  // Auto-save to cloud when messages change
+  useEffect(() => {
+    if (syncCode && messages.length > 0 && !isSyncing) {
+      const timer = setTimeout(() => {
+        saveToCloud(messages)
+      }, 5000) // Debounce 5 seconds
+      return () => clearTimeout(timer)
+    }
+  }, [messages, syncCode, saveToCloud, isSyncing])
 
   const toggleRecording = useCallback(() => {
     if (isRecording) {
@@ -294,9 +313,16 @@ function App() {
     sendMessage(inputText)
   }
 
-  const startConversation = () => {
-    setHasStarted(true)
-    sendMessage("Hi! I'm ready to learn Chinese. What should we start with?", [])
+  const startConversation = (lessonId = null) => {
+    if (lessonId) {
+      setCurrentLesson(lessonId)
+      const lesson = getLesson(lessonId)?.lesson
+      setHasStarted(true)
+      sendMessage(`I'd like to learn about ${lesson?.title || 'this topic'}. Please teach me!`, [])
+    } else {
+      setHasStarted(true)
+      sendMessage("Hi! I'm ready to learn Chinese. What should we start with?", [])
+    }
   }
 
   const jumpToLesson = (lessonId) => {
@@ -317,6 +343,26 @@ function App() {
     return content.replace(/\([^)]*[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ][^)]*\)/g, '')
   }
 
+  const handleCreateSyncCode = async () => {
+    const code = await createSyncCode(messages)
+    if (code) {
+      setShowSyncInput(false)
+    }
+  }
+
+  const handleLoadFromCloud = async () => {
+    if (!syncInput.trim()) return
+    const result = await loadFromCloud(syncInput.trim())
+    if (result) {
+      if (result.messages && result.messages.length > 0) {
+        setMessages(result.messages)
+        setHasStarted(true)
+      }
+      setShowSyncInput(false)
+      setSyncInput('')
+    }
+  }
+
   if (!isLoaded) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-red-50 via-orange-50 to-amber-50 flex items-center justify-center">
@@ -328,7 +374,7 @@ function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-red-50 via-orange-50 to-amber-50 flex">
       {/* Sidebar */}
-      <div className={`fixed inset-y-0 left-0 z-30 w-72 bg-white shadow-xl transform transition-transform duration-300 ${
+      <div className={`fixed inset-y-0 left-0 z-30 w-72 sm:w-80 bg-white shadow-xl transform transition-transform duration-300 ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full'
       }`}>
         <div className="flex flex-col h-full">
@@ -363,6 +409,89 @@ function App() {
             </div>
           </div>
 
+          {/* Sync Section */}
+          <div className="p-4 border-b bg-gray-50">
+            <div className="text-xs font-semibold text-gray-500 uppercase mb-2">
+              Sync Across Devices
+            </div>
+            {syncCode ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border">
+                  <span className="font-mono text-lg font-bold text-gray-800 tracking-wider">{syncCode}</span>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(syncCode)}
+                    className="text-gray-400 hover:text-gray-600"
+                    title="Copy code"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => saveToCloud(messages)}
+                    disabled={isSyncing}
+                    className="flex-1 px-3 py-1.5 text-xs bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50"
+                  >
+                    {isSyncing ? 'Saving...' : 'Save Now'}
+                  </button>
+                  <button
+                    onClick={clearSyncCode}
+                    className="px-3 py-1.5 text-xs text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-lg"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            ) : showSyncInput ? (
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={syncInput}
+                  onChange={(e) => setSyncInput(e.target.value.toUpperCase())}
+                  placeholder="Enter sync code"
+                  maxLength={6}
+                  className="w-full px-3 py-2 border rounded-lg font-mono text-center text-lg tracking-wider uppercase"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleLoadFromCloud}
+                    disabled={isSyncing || syncInput.length !== 6}
+                    className="flex-1 px-3 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+                  >
+                    {isSyncing ? 'Loading...' : 'Load Progress'}
+                  </button>
+                  <button
+                    onClick={() => {setShowSyncInput(false); setSyncInput('')}}
+                    className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-lg"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCreateSyncCode}
+                  disabled={isSyncing}
+                  className="flex-1 px-3 py-1.5 text-xs bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50"
+                >
+                  {isSyncing ? 'Creating...' : 'Create Sync Code'}
+                </button>
+                <button
+                  onClick={() => setShowSyncInput(true)}
+                  className="flex-1 px-3 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                >
+                  Enter Code
+                </button>
+              </div>
+            )}
+            {syncError && (
+              <p className="text-xs text-red-500 mt-1">{syncError}</p>
+            )}
+          </div>
+
           {/* Lessons */}
           <div className="flex-1 overflow-y-auto p-4">
             {curriculum.levels.map((level) => (
@@ -388,14 +517,14 @@ function App() {
                         }`}
                       >
                         {isCompleted ? (
-                          <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                          <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                           </svg>
                         ) : (
-                          <span className={`w-4 h-4 rounded-full border-2 ${isCurrent ? 'border-red-500' : 'border-gray-300'}`} />
+                          <span className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${isCurrent ? 'border-red-500' : 'border-gray-300'}`} />
                         )}
-                        <span className="flex-1">{lesson.title}</span>
-                        <span className="text-xs text-gray-400 font-chinese">{lesson.titleChinese}</span>
+                        <span className="flex-1 truncate">{lesson.title}</span>
+                        <span className="text-xs text-gray-400 font-chinese flex-shrink-0">{lesson.titleChinese}</span>
                       </button>
                     )
                   })}
@@ -405,7 +534,7 @@ function App() {
           </div>
 
           {/* Clear History */}
-          <div className="p-4 border-t">
+          <div className="p-4 border-t safe-area-bottom">
             <button
               onClick={clearHistory}
               className="w-full px-4 py-2 text-sm text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
@@ -427,9 +556,9 @@ function App() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-h-screen">
         {/* Header */}
-        <header className="bg-white/80 backdrop-blur-sm border-b border-red-100 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-            <div className="flex items-center gap-3">
+        <header className="bg-white/80 backdrop-blur-sm border-b border-red-100 sticky top-0 z-10 safe-area-top">
+          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 onClick={() => setSidebarOpen(true)}
                 className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
@@ -445,37 +574,37 @@ function App() {
                 <div>
                   <h1 className="font-semibold text-gray-800 text-sm">Chinese Tutor</h1>
                   {currentLesson && (
-                    <p className="text-xs text-gray-500">{currentLesson.title}</p>
+                    <p className="text-xs text-gray-500 hidden sm:block">{currentLesson.title}</p>
                   )}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <span className="text-xs text-gray-500">Pinyin</span>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <label className="flex items-center gap-1 sm:gap-1.5 cursor-pointer">
+                <span className="text-xs text-gray-500 hidden sm:inline">Pinyin</span>
                 <button
                   onClick={() => setShowPinyin(!showPinyin)}
-                  className={`relative w-9 h-5 rounded-full transition-colors ${
+                  className={`relative w-8 sm:w-9 h-5 rounded-full transition-colors ${
                     showPinyin ? 'bg-red-500' : 'bg-gray-300'
                   }`}
                 >
                   <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
-                    showPinyin ? 'translate-x-4' : ''
+                    showPinyin ? 'translate-x-3 sm:translate-x-4' : ''
                   }`} />
                 </button>
               </label>
 
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <span className="text-xs text-gray-500">Sound</span>
+              <label className="flex items-center gap-1 sm:gap-1.5 cursor-pointer">
+                <span className="text-xs text-gray-500 hidden sm:inline">Sound</span>
                 <button
                   onClick={() => setAutoSpeak(!autoSpeak)}
-                  className={`relative w-9 h-5 rounded-full transition-colors ${
+                  className={`relative w-8 sm:w-9 h-5 rounded-full transition-colors ${
                     autoSpeak ? 'bg-red-500' : 'bg-gray-300'
                   }`}
                 >
                   <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
-                    autoSpeak ? 'translate-x-4' : ''
+                    autoSpeak ? 'translate-x-3 sm:translate-x-4' : ''
                   }`} />
                 </button>
               </label>
@@ -484,17 +613,17 @@ function App() {
 
           {/* Current lesson vocab hint */}
           {currentLesson && hasStarted && (
-            <div className="bg-amber-50/80 border-t border-amber-100 px-4 py-1.5 overflow-x-auto">
-              <div className="max-w-3xl mx-auto flex gap-3 text-xs">
-                <span className="text-amber-600 whitespace-nowrap">Current vocab:</span>
-                {currentLesson.vocabulary.slice(0, 4).map((v, i) => (
+            <div className="bg-amber-50/80 border-t border-amber-100 px-3 sm:px-4 py-1.5 overflow-x-auto">
+              <div className="max-w-3xl mx-auto flex gap-2 sm:gap-3 text-xs">
+                <span className="text-amber-600 whitespace-nowrap">Vocab:</span>
+                {currentLesson.vocabulary.slice(0, 3).map((v, i) => (
                   <span key={i} className="whitespace-nowrap text-amber-800">
                     <span className="font-chinese">{v.chinese}</span>
-                    <span className="text-amber-500 ml-1">({v.english})</span>
+                    <span className="text-amber-500 ml-1 hidden sm:inline">({v.english})</span>
                   </span>
                 ))}
-                {currentLesson.vocabulary.length > 4 && (
-                  <span className="text-amber-500">+{currentLesson.vocabulary.length - 4}</span>
+                {currentLesson.vocabulary.length > 3 && (
+                  <span className="text-amber-500">+{currentLesson.vocabulary.length - 3}</span>
                 )}
               </div>
             </div>
@@ -502,32 +631,132 @@ function App() {
         </header>
 
         {/* Chat Area */}
-        <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-6 pb-24">
+        <main className="flex-1 max-w-3xl w-full mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-24">
           {!hasStarted ? (
-            // Welcome Screen
-            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-              <div className="w-20 h-20 mb-6 rounded-full bg-gradient-to-br from-red-500 to-amber-500 flex items-center justify-center shadow-lg">
-                <span className="text-white text-3xl font-chinese">你好</span>
+            // Welcome Screen with Curriculum
+            <div className="flex flex-col items-center pt-4 sm:pt-8">
+              <div className="w-16 h-16 sm:w-20 sm:h-20 mb-4 sm:mb-6 rounded-full bg-gradient-to-br from-red-500 to-amber-500 flex items-center justify-center shadow-lg">
+                <span className="text-white text-2xl sm:text-3xl font-chinese">你好</span>
               </div>
-              <h2 className="text-2xl font-semibold text-gray-800 mb-2">
+              <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-2 text-center">
                 Welcome to Chinese Tutor
               </h2>
-              <p className="text-gray-600 mb-6 max-w-md">
-                Learn Chinese through natural conversation. I'll guide you through lessons,
-                teach vocabulary, and practice with you.
+              <p className="text-gray-600 mb-4 sm:mb-6 max-w-md text-center text-sm sm:text-base px-4">
+                Learn Chinese through natural conversation. Choose a lesson below or start from the beginning.
               </p>
               <button
-                onClick={startConversation}
-                className="px-8 py-3 bg-gradient-to-r from-red-500 to-amber-500 text-white rounded-full font-medium shadow-lg hover:shadow-xl transition-shadow"
+                onClick={() => startConversation()}
+                className="px-6 sm:px-8 py-2.5 sm:py-3 bg-gradient-to-r from-red-500 to-amber-500 text-white rounded-full font-medium shadow-lg hover:shadow-xl transition-shadow text-sm sm:text-base"
               >
                 Start Learning
               </button>
 
-              <div className="mt-8 text-sm text-gray-500">
-                <p>You can also say things like:</p>
+              {/* Sync code entry for returning users */}
+              <div className="mt-6 text-center">
+                {!showSyncInput ? (
+                  <button
+                    onClick={() => setShowSyncInput(true)}
+                    className="text-sm text-gray-500 hover:text-red-500"
+                  >
+                    Have a sync code? Load your progress
+                  </button>
+                ) : (
+                  <div className="flex flex-col items-center gap-2">
+                    <input
+                      type="text"
+                      value={syncInput}
+                      onChange={(e) => setSyncInput(e.target.value.toUpperCase())}
+                      placeholder="Enter sync code"
+                      maxLength={6}
+                      className="px-4 py-2 border rounded-lg font-mono text-center text-lg tracking-wider uppercase w-40"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleLoadFromCloud}
+                        disabled={isSyncing || syncInput.length !== 6}
+                        className="px-4 py-1.5 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+                      >
+                        {isSyncing ? 'Loading...' : 'Load'}
+                      </button>
+                      <button
+                        onClick={() => {setShowSyncInput(false); setSyncInput('')}}
+                        className="px-4 py-1.5 text-sm text-gray-500 hover:bg-gray-100 rounded-lg"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {syncError && <p className="text-xs text-red-500">{syncError}</p>}
+                  </div>
+                )}
+              </div>
+
+              {/* Curriculum Overview */}
+              <div className="w-full mt-8 sm:mt-12">
+                <h3 className="text-lg font-semibold text-gray-800 mb-4 text-center">Course Curriculum</h3>
+                <div className="space-y-6">
+                  {curriculum.levels.map((level) => (
+                    <div key={level.id} className="bg-white rounded-xl shadow-md overflow-hidden">
+                      <div className="bg-gradient-to-r from-red-500 to-amber-500 px-4 py-3">
+                        <h4 className="text-white font-semibold">
+                          Level {level.id}: {level.name}
+                        </h4>
+                        <p className="text-white/80 text-sm">{level.description}</p>
+                      </div>
+                      <div className="p-3 sm:p-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                          {level.lessons.map((lesson) => {
+                            const isCompleted = progress.completedLessons.includes(lesson.id)
+                            return (
+                              <button
+                                key={lesson.id}
+                                onClick={() => startConversation(lesson.id)}
+                                className={`text-left p-3 rounded-lg border transition-all hover:shadow-md ${
+                                  isCompleted
+                                    ? 'bg-green-50 border-green-200 hover:border-green-300'
+                                    : 'bg-gray-50 border-gray-200 hover:border-red-300'
+                                }`}
+                              >
+                                <div className="flex items-start gap-2">
+                                  {isCompleted ? (
+                                    <svg className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                    </svg>
+                                  ) : (
+                                    <span className="w-5 h-5 rounded-full border-2 border-gray-300 flex-shrink-0 mt-0.5" />
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-medium text-gray-800 truncate">{lesson.title}</span>
+                                      <span className="text-gray-400 font-chinese text-sm flex-shrink-0">{lesson.titleChinese}</span>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-0.5">{lesson.description}</p>
+                                    <div className="flex flex-wrap gap-1 mt-2">
+                                      {lesson.vocabulary.slice(0, 3).map((v, i) => (
+                                        <span key={i} className="inline-block px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-xs font-chinese">
+                                          {v.chinese}
+                                        </span>
+                                      ))}
+                                      {lesson.vocabulary.length > 3 && (
+                                        <span className="text-xs text-gray-400">+{lesson.vocabulary.length - 3}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-8 text-sm text-gray-500 text-center px-4">
+                <p>During conversations, you can say:</p>
                 <div className="flex flex-wrap gap-2 mt-2 justify-center">
-                  {['Teach me greetings', 'Learn about food', 'Practice numbers'].map((cmd) => (
-                    <span key={cmd} className="px-3 py-1 bg-white rounded-full text-gray-600 shadow-sm">
+                  {['Next lesson', 'Teach me about food', 'Practice numbers'].map((cmd) => (
+                    <span key={cmd} className="px-3 py-1 bg-white rounded-full text-gray-600 shadow-sm text-xs sm:text-sm">
                       "{cmd}"
                     </span>
                   ))}
@@ -536,18 +765,18 @@ function App() {
             </div>
           ) : (
             // Messages
-            <div className="space-y-4">
+            <div className="space-y-3 sm:space-y-4">
               {messages.map((message, index) => (
                 <div
                   key={index}
                   className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}
                 >
-                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+                  <div className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-3 sm:px-4 py-2.5 sm:py-3 ${
                     message.role === 'user'
                       ? 'bg-gradient-to-r from-red-500 to-amber-500 text-white'
                       : 'bg-white shadow-md'
                   }`}>
-                    <p className={`whitespace-pre-wrap font-chinese ${
+                    <p className={`whitespace-pre-wrap font-chinese text-sm sm:text-base ${
                       message.role === 'assistant' ? 'text-gray-800' : ''
                     }`}>
                       {formatMessage(message.content)}
@@ -584,7 +813,7 @@ function App() {
           )}
 
           {error && (
-            <div className="fixed top-24 left-1/2 transform -translate-x-1/2 bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded-lg shadow-lg text-sm">
+            <div className="fixed top-24 left-1/2 transform -translate-x-1/2 bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded-lg shadow-lg text-sm max-w-[90%]">
               {error}
             </div>
           )}
@@ -592,16 +821,16 @@ function App() {
 
         {/* Input Area */}
         {hasStarted && (
-          <div className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-sm border-t border-gray-200">
-            <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-sm border-t border-gray-200 safe-area-bottom">
+            <div className="max-w-3xl mx-auto px-3 sm:px-4 py-2 sm:py-3">
               <form onSubmit={handleSubmit} className="flex items-center gap-2">
                 <div className="flex-1 relative">
                   <input
                     type="text"
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
-                    placeholder="Type in Chinese or English... Try 'next lesson' or 'teach me about food'"
-                    className="w-full px-4 py-2.5 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-red-500 font-chinese text-sm"
+                    placeholder="Type in Chinese or English..."
+                    className="w-full px-3 sm:px-4 py-2 sm:py-2.5 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-red-500 font-chinese text-sm"
                     disabled={isLoading}
                   />
                 </div>
@@ -611,7 +840,7 @@ function App() {
                     type="button"
                     onClick={toggleRecording}
                     disabled={isLoading}
-                    className={`p-2.5 rounded-full transition-all ${
+                    className={`p-2 sm:p-2.5 rounded-full transition-all ${
                       isRecording
                         ? 'bg-red-500 text-white animate-pulse-ring'
                         : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -627,7 +856,7 @@ function App() {
                   <button
                     type="button"
                     onClick={stopSpeaking}
-                    className="p-2.5 rounded-full bg-amber-500 text-white"
+                    className="p-2 sm:p-2.5 rounded-full bg-amber-500 text-white"
                   >
                     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -639,7 +868,7 @@ function App() {
                 <button
                   type="submit"
                   disabled={!inputText.trim() || isLoading}
-                  className="p-2.5 rounded-full bg-gradient-to-r from-red-500 to-amber-500 text-white disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-shadow"
+                  className="p-2 sm:p-2.5 rounded-full bg-gradient-to-r from-red-500 to-amber-500 text-white disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-shadow"
                 >
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />

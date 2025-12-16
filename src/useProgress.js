@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 
 const STORAGE_KEY = 'chinese-tutor-progress';
+const SYNC_CODE_KEY = 'chinese-tutor-sync-code';
 
 const defaultProgress = {
   currentLessonId: '1.1',
   completedLessons: [],
-  vocabularyProgress: {}, // { "你好": { seen: 3, correct: 2, lastSeen: "2024-01-01" } }
-  totalPracticeTime: 0, // in minutes
+  vocabularyProgress: {},
+  totalPracticeTime: 0,
   sessionsCompleted: 0,
   lastSessionDate: null,
   streak: 0,
@@ -15,14 +16,21 @@ const defaultProgress = {
 export function useProgress() {
   const [progress, setProgress] = useState(defaultProgress);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [syncCode, setSyncCode] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
 
-  // Load progress from localStorage on mount
+  // Load progress and sync code from localStorage on mount
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         setProgress({ ...defaultProgress, ...parsed });
+      }
+      const savedCode = localStorage.getItem(SYNC_CODE_KEY);
+      if (savedCode) {
+        setSyncCode(savedCode);
       }
     } catch (err) {
       console.error('Failed to load progress:', err);
@@ -40,6 +48,88 @@ export function useProgress() {
       }
     }
   }, [progress, isLoaded]);
+
+  // Save sync code to localStorage
+  useEffect(() => {
+    if (syncCode) {
+      localStorage.setItem(SYNC_CODE_KEY, syncCode);
+    }
+  }, [syncCode]);
+
+  // Create a new sync code and upload progress
+  const createSyncCode = useCallback(async (messages = []) => {
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      const response = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ progress, messages }),
+      });
+      const data = await response.json();
+      if (data.code) {
+        setSyncCode(data.code);
+        return data.code;
+      }
+      throw new Error('Failed to create sync code');
+    } catch (err) {
+      setSyncError(err.message);
+      return null;
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [progress]);
+
+  // Save progress to existing sync code
+  const saveToCloud = useCallback(async (messages = []) => {
+    if (!syncCode) return false;
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      const response = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: syncCode, progress, messages }),
+      });
+      const data = await response.json();
+      return data.success;
+    } catch (err) {
+      setSyncError(err.message);
+      return false;
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [syncCode, progress]);
+
+  // Load progress from a sync code
+  const loadFromCloud = useCallback(async (code) => {
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      const response = await fetch(`/api/sync?code=${code}`);
+      if (!response.ok) {
+        throw new Error('Sync code not found');
+      }
+      const data = await response.json();
+      if (data.progress) {
+        setProgress({ ...defaultProgress, ...data.progress });
+        setSyncCode(code.toUpperCase());
+        return { progress: data.progress, messages: data.messages || [] };
+      }
+      throw new Error('Invalid sync data');
+    } catch (err) {
+      setSyncError(err.message);
+      return null;
+    } finally {
+      setIsSyncing(false);
+    }
+  }, []);
+
+  // Clear sync code (disconnect from cloud)
+  const clearSyncCode = useCallback(() => {
+    setSyncCode(null);
+    localStorage.removeItem(SYNC_CODE_KEY);
+  }, []);
 
   // Mark a lesson as complete
   const completeLesson = useCallback((lessonId) => {
@@ -92,7 +182,6 @@ export function useProgress() {
         ? new Date(prev.lastSessionDate).toDateString()
         : null;
 
-      // Calculate streak
       let newStreak = prev.streak;
       if (lastDate !== today) {
         const yesterday = new Date();
@@ -119,7 +208,7 @@ export function useProgress() {
     setProgress(defaultProgress);
   }, []);
 
-  // Get vocabulary that needs review (spaced repetition logic)
+  // Get vocabulary that needs review
   const getVocabularyForReview = useCallback(() => {
     const now = new Date();
     const reviewItems = [];
@@ -131,7 +220,6 @@ export function useProgress() {
       const daysSince = (now - lastSeen) / (1000 * 60 * 60 * 24);
       const accuracy = data.seen > 0 ? data.correct / data.seen : 0;
 
-      // Simple spaced repetition: review sooner if accuracy is low
       const reviewInterval = accuracy > 0.8 ? 7 : accuracy > 0.5 ? 3 : 1;
 
       if (daysSince >= reviewInterval) {
@@ -145,11 +233,18 @@ export function useProgress() {
   return {
     progress,
     isLoaded,
+    syncCode,
+    isSyncing,
+    syncError,
     completeLesson,
     setCurrentLesson,
     trackVocabulary,
     updateSessionStats,
     resetProgress,
     getVocabularyForReview,
+    createSyncCode,
+    saveToCloud,
+    loadFromCloud,
+    clearSyncCode,
   };
 }
