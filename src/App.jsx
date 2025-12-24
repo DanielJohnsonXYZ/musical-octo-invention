@@ -7,6 +7,7 @@ function App() {
   const [inputText, setInputText] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [showPinyin, setShowPinyin] = useState(true)
   const [autoSpeak, setAutoSpeak] = useState(true)
@@ -32,7 +33,8 @@ function App() {
   } = useProgress()
 
   const messagesEndRef = useRef(null)
-  const recognitionRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
   const audioRef = useRef(null)
   const sessionStartRef = useRef(null)
 
@@ -73,38 +75,33 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Initialize speech recognition
-  useEffect(() => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-      recognitionRef.current = new SpeechRecognition()
-      recognitionRef.current.continuous = false
-      recognitionRef.current.interimResults = false
-      recognitionRef.current.lang = 'zh-CN'
+  // Transcribe audio using Whisper API
+  const transcribeAudio = useCallback(async (audioBlob) => {
+    setIsTranscribing(true)
+    setError(null)
 
-      recognitionRef.current.onresult = (event) => {
-        const transcript = event.results[0][0].transcript
-        setInputText(transcript)
-        setIsRecording(false)
+    try {
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: audioBlob,
+        headers: {
+          'Content-Type': 'audio/webm',
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error('Transcription failed')
       }
 
-      recognitionRef.current.onerror = (event) => {
-        console.error('Speech recognition error:', event.error)
-        setIsRecording(false)
-        if (event.error === 'no-speech') {
-          setError('No speech detected. Please try again.')
-        }
+      const data = await response.json()
+      if (data.text) {
+        setInputText(data.text)
       }
-
-      recognitionRef.current.onend = () => {
-        setIsRecording(false)
-      }
-    }
-
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort()
-      }
+    } catch (err) {
+      console.error('Transcription error:', err)
+      setError('Failed to transcribe audio. Please try again.')
+    } finally {
+      setIsTranscribing(false)
     }
   }, [])
 
@@ -134,16 +131,48 @@ function App() {
     }
   }, [messages, syncCode, saveToCloud, isSyncing])
 
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        stream.getTracks().forEach(track => track.stop())
+        transcribeAudio(audioBlob)
+      }
+
+      mediaRecorder.start()
+      setIsRecording(true)
+      setError(null)
+    } catch (err) {
+      console.error('Failed to start recording:', err)
+      setError('Microphone access denied. Please allow microphone access.')
+    }
+  }, [transcribeAudio])
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+    }
+  }, [])
+
   const toggleRecording = useCallback(() => {
     if (isRecording) {
-      recognitionRef.current?.stop()
-      setIsRecording(false)
+      stopRecording()
     } else {
-      setError(null)
-      recognitionRef.current?.start()
-      setIsRecording(true)
+      startRecording()
     }
-  }, [isRecording])
+  }, [isRecording, startRecording, stopRecording])
 
   const extractChineseText = (text) => {
     const chineseRegex = /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+/g
@@ -835,22 +864,29 @@ function App() {
                   />
                 </div>
 
-                {recognitionRef.current && (
-                  <button
-                    type="button"
-                    onClick={toggleRecording}
-                    disabled={isLoading}
-                    className={`p-2 sm:p-2.5 rounded-full transition-all ${
-                      isRecording
-                        ? 'bg-red-500 text-white animate-pulse-ring'
+                <button
+                  type="button"
+                  onClick={toggleRecording}
+                  disabled={isLoading || isTranscribing}
+                  className={`p-2 sm:p-2.5 rounded-full transition-all ${
+                    isRecording
+                      ? 'bg-red-500 text-white animate-pulse-ring'
+                      : isTranscribing
+                        ? 'bg-amber-500 text-white'
                         : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
+                  }`}
+                >
+                  {isTranscribing ? (
+                    <svg className="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  ) : (
                     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                     </svg>
-                  </button>
-                )}
+                  )}
+                </button>
 
                 {isSpeaking && (
                   <button
